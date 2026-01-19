@@ -247,29 +247,29 @@ function renderHome() {
       <div class="grid two">
         <div>
           <label>Session name</label>
-          <input id="sName" class="input" placeholder="e.g. Friday Night @ UTown" />
+          <input id="sName" class="input" />
         </div>
         <div>
           <label>Player names (comma separated)</label>
-          <input id="pNames" class="input" placeholder="A, B, C, D" value="Player A, Player B, Player C, Player D"/>
+          <input id="pNames" class="input" />
         </div>
 
         <div>
           <label>Base bet</label>
-          <input id="baseBet" class="input" type="number" step="0.01" value="1" />
+          <input id="baseBet" class="input" type="number" step="0.01" />
         </div>
         <div>
           <label>Bet per card</label>
-          <input id="betPerCard" class="input" type="number" step="0.01" value="0.5" />
+          <input id="betPerCard" class="input" type="number" step="0.01" />
         </div>
 
         <div>
           <label>Reward per 同花顺</label>
-          <input id="rewardSF" class="input" type="number" step="0.01" value="5" />
+          <input id="rewardSF" class="input" type="number" step="0.01" />
         </div>
         <div>
           <label>Reward per 金刚</label>
-          <input id="rewardKK" class="input" type="number" step="0.01" value="10" />
+          <input id="rewardKK" class="input" type="number" step="0.01" />
         </div>
       </div>
 
@@ -295,9 +295,15 @@ function renderHome() {
   `;
 
   $("#createSession").onclick = () => {
-    const name = ($("#sName").value || "Untitled Session").trim();
     const rawPlayers = ($("#pNames").value || "").split(",").map(s => s.trim()).filter(Boolean);
-    const playerNames = rawPlayers.length >= 4 ? rawPlayers.slice(0,4) : ["Player A","Player B","Player C","Player D"];
+    
+    if (rawPlayers.length === 0) {
+      alert("Please enter at least player names.");
+      return;
+    }
+
+    const name = ($("#sName").value || "Untitled Session").trim();
+    const playerNames = rawPlayers.length >= 4 ? rawPlayers.slice(0, 4) : rawPlayers;
 
     const session = {
       id: uid(),
@@ -598,24 +604,24 @@ function renderGame(id) {
                   <div>
                     <label>Remaining cards</label>
                     <input class="input" type="number" min="0" max="52" step="1"
-                          id="rem_${p.id}" value="3">
+                          id="rem_${p.id}">
                   </div>
   
                   <div>
                     <label>同花顺 count</label>
                     <input class="input" type="number" min="0" max="50" step="1"
-                          id="sf_${p.id}" value="0">
+                          id="sf_${p.id}">
                   </div>
   
                   <div>
                     <label>金刚 count</label>
                     <input class="input" type="number" min="0" max="50" step="1"
-                          id="kk_${p.id}" value="0">
+                          id="kk_${p.id}">
                   </div>
   
                   <div>
                     <label>Notes (optional)</label>
-                    <input class="input" id="note_${p.id}" placeholder="e.g. went out fast" />
+                    <input class="input" id="note_${p.id}" />
                   </div>
                 </div>
               </div>
@@ -642,6 +648,24 @@ function renderGame(id) {
     $("#mClose").onclick = closeModal;
   
     $("#mCompute").onclick = () => {
+      // Validate that all fields are filled
+      let isValid = true;
+      for (const p of session.players) {
+        const remValue = $("#rem_" + p.id).value;
+        const sfValue = $("#sf_" + p.id).value;
+        const kkValue = $("#kk_" + p.id).value;
+
+        if (remValue === "" || sfValue === "" || kkValue === "") {
+          isValid = false;
+          break;
+        }
+      }
+
+      if (!isValid) {
+        alert("Please fill in the required fields or each player.");
+        return;
+      }
+
       // ✅ ONLY HERE the game ends and record is saved
   
       const stats = {};
