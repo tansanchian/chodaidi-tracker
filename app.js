@@ -139,48 +139,45 @@ Rules:
 function calcGameDeltas({ players, baseBet, betPerCard, rewardSF, rewardKK, stats }) {
   const ids = players.map(p => p.id);
 
-  // Winner must be exactly one player with 0 remaining cards
-  const winner = players.find(p => clampInt(stats[p.id]?.remainingCards, 0, 100) === 0);
-  if (!winner) {
-    return { error: "No winner detected (need exactly one player with 0 cards)." };
+  // Winner must exist and be unique (0 remaining)
+  const winners = players.filter(p => clampInt(stats[p.id]?.remainingCards, 0, 100) === 0);
+  if (winners.length !== 1) {
+    return { error: "Need exactly ONE winner with 0 remaining cards." };
   }
+  const winnerId = winners[0].id;
 
   const deltas = Object.fromEntries(ids.map(id => [id, 0]));
 
-  // helper transfer
-  function transfer(fromId, toId, amount) {
+  const transfer = (fromId, toId, amount) => {
     const a = clampMoney(amount);
     if (a === 0) return;
-    deltas[fromId] -= a;
-    deltas[toId] += a;
-  }
+    deltas[fromId] = clampMoney(deltas[fromId] - a);
+    deltas[toId]   = clampMoney(deltas[toId] + a);
+  };
 
-  // Base pay: each non-winner pays winner
+  // 2) Each loser pays winner: baseBet + remainingCards * betPerCard
   for (const p of players) {
     const r = clampInt(stats[p.id]?.remainingCards, 0, 100);
-    if (p.id === winner.id) continue;
-    const payWinner = baseBet + r * betPerCard;
-    transfer(p.id, winner.id, payWinner);
+    if (p.id === winnerId) continue;
+    transfer(p.id, winnerId, baseBet + r * betPerCard);
   }
 
-  // Within non-winners: higher remaining pays lower remaining diff*betPerCard
-  const losers = players.filter(p => p.id !== winner.id);
-  for (let i = 0; i < losers.length; i++) {
-    for (let j = 0; j < losers.length; j++) {
-      if (i === j) continue;
-      const A = losers[i];
-      const B = losers[j];
-      const rA = clampInt(stats[A.id]?.remainingCards, 0, 100);
-      const rB = clampInt(stats[B.id]?.remainingCards, 0, 100);
+  // 2b) Among losers: higher remaining pays lower remaining diff * betPerCard
+  const losers = players
+    .filter(p => p.id !== winnerId)
+    .map(p => ({ id: p.id, r: clampInt(stats[p.id]?.remainingCards, 0, 100) }));
 
-      // Only charge once per pair: handle only when rB > rA and use ordering by ids to avoid double-count
-      if (rB > rA && B.id > A.id) {
-        transfer(B.id, A.id, (rB - rA) * betPerCard);
-      }
+  // pairwise i<j, pay from higher r to lower r
+  for (let i = 0; i < losers.length; i++) {
+    for (let j = i + 1; j < losers.length; j++) {
+      const A = losers[i], B = losers[j];
+      if (A.r === B.r) continue;
+      if (A.r > B.r) transfer(A.id, B.id, (A.r - B.r) * betPerCard);
+      else           transfer(B.id, A.id, (B.r - A.r) * betPerCard);
     }
   }
 
-  // Special combos: each combo earns reward from EACH other player
+  // 3) Specials: each combo earns reward from each other player
   for (const p of players) {
     const sf = clampInt(stats[p.id]?.sfCount, 0, 50);
     const kk = clampInt(stats[p.id]?.kkCount, 0, 50);
@@ -193,14 +190,11 @@ function calcGameDeltas({ players, baseBet, betPerCard, rewardSF, rewardKK, stat
     }
   }
 
-  // Round deltas
-  for (const id of ids) deltas[id] = clampMoney(deltas[id]);
-
-  // Sanity: sum = 0
+  // sanity sum (should be 0)
   const sum = clampMoney(ids.reduce((acc, id) => acc + deltas[id], 0));
-
-  return { winnerId: winner.id, deltas, sum };
+  return { winnerId, deltas, sum };
 }
+
 
 /** ---------- Router ---------- **/
 window.addEventListener("hashchange", render);
@@ -222,9 +216,14 @@ function getSession(id) {
   return sessions.find(s => s.id === id);
 }
 function updateSession(updated) {
-  sessions = sessions.map(s => (s.id === updated.id ? updated : s));
+  const idx = sessions.findIndex(s => s.id === updated.id);
+  if (idx === -1) return;
+
+  // Replace with a deep copy so nothing gets lost by reference weirdness
+  sessions[idx] = JSON.parse(JSON.stringify(updated));
   saveSessions(sessions);
 }
+
 
 /** ---------- Views ---------- **/
 function render() {
@@ -668,14 +667,57 @@ $("#endGame").onclick = () => {
 
   // Save record button (your existing compute logic)
   $("#mCompute").onclick = () => {
-    // IMPORTANT: prevent onClose from firing when we close after saving
+    // prevent modal onClose from doing discard
     modalOnClose = null;
-
-    // ... your existing stats reading + calcGameDeltas + apply balances ...
-
+  
+    const stats = {};
+    for (const p of session.players) {
+      stats[p.id] = {
+        remainingCards: clampInt($("#rem_" + p.id).value, 0, 52),
+        sfCount: clampInt($("#sf_" + p.id).value, 0, 50),
+        kkCount: clampInt($("#kk_" + p.id).value, 0, 50),
+        note: ($("#note_" + p.id).value || "").trim()
+      };
+    }
+  
+    const res = calcGameDeltas({
+      players: session.players,
+      baseBet: session.rules.baseBet,
+      betPerCard: session.rules.betPerCard,
+      rewardSF: session.rules.rewardSF,
+      rewardKK: session.rules.rewardKK,
+      stats
+    });
+  
+    if (res.error) { alert(res.error); return; }
+  
+    // Apply balances
+    session.players = session.players.map(p => ({
+      ...p,
+      balance: clampMoney((p.balance ?? 0) + (res.deltas[p.id] ?? 0))
+    }));
+  
+    // Save record
+    session.games = session.games || [];
+    session.games.push({
+      id: uid(),
+      endedAt: nowStamp(),
+      winnerId: res.winnerId,
+      deltas: res.deltas,
+      stats
+    });
+  
+    delete session.currentGame;
+  
+    updateSession(session);   // ✅ persist
+  
     closeModal();
+  
+    // ✅ force render session immediately
     location.hash = `#/session/${session.id}`;
+    render();
   };
+  
 };
 
 
